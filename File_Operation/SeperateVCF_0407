@@ -1,0 +1,95 @@
+#!/usr/bin/env Rscript
+
+#输入0108.vcf得到0108_Sep.vcf
+#下一步是用这个0108_Sep.vcf进行annovar
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(maftools)
+library(data.table)
+
+# 获取命令行参数
+args <- commandArgs(trailingOnly = TRUE)
+# 检查是否提供了足够的参数
+if (length(args) < 2) {
+  stop("Usage: Rscript script.R input_vcf_file ID")
+}
+
+input_vcf <- args[1]
+id <- args[2]
+
+lines <- readLines(input_vcf)
+header_index <- grep("^#", lines)
+header_index <- header_index[!grepl("^##", lines[header_index])][1] 
+header_line <- lines[header_index]
+data_lines <- lines[(header_index + 1):length(lines)]
+col_names <- unlist(strsplit(header_line, "\t"))
+vcf_data <- read.table(text = data_lines, header = FALSE, col.names = col_names, stringsAsFactors = FALSE)
+
+# 处理FORMAT列及其对应的样本列
+format_sample_pairs <- lapply(seq_along(vcf_data$FORMAT), function(i) {
+  format_fields <- unlist(strsplit(vcf_data$FORMAT[i], ":"))
+  sample_values <- unlist(strsplit(vcf_data[[ncol(vcf_data)]][i], ":"))
+  
+  # 检查是否分割正确
+  if (length(format_fields) != length(sample_values)) {
+    cat("行号:", i, " - 格式字段长度:", length(format_fields), " - 样本值长度:", length(sample_values), "\n")
+    cat("格式字段:", format_fields, "\n")
+    cat("样本值:", sample_values, "\n")
+  }
+  
+  setNames(sample_values, format_fields)
+})
+# 获取所有可能的格式字段
+all_format_keys <- unique(unlist(lapply(format_sample_pairs, names)))
+# 创建一个模板数据框
+template_format_df <- data.frame(matrix(NA, nrow = length(format_sample_pairs), ncol = length(all_format_keys)))
+colnames(template_format_df) <- all_format_keys
+for (i in seq_along(format_sample_pairs)) {
+  template_format_df[i, names(format_sample_pairs[[i]])] <- unlist(format_sample_pairs[[i]])
+}
+vcf_data <- cbind(vcf_data, template_format_df)
+
+# 处理INFO列，将其拆分为多个列
+info_list <- vcf_data$INFO %>%
+  strsplit(split = ";") 
+all_keys <- unique(unlist(lapply(info_list, function(x) sapply(strsplit(x, "="), "[[", 1))))
+template_df <- data.frame(matrix(NA, nrow = length(info_list), ncol = length(all_keys)))
+colnames(template_df) <- all_keys  
+for (i in seq_along(info_list)) {
+  info_pairs <- strsplit(info_list[[i]], "=")
+  for (pair in info_pairs) {
+    key <- pair[1]
+    value <- ifelse(length(pair) > 1, pair[2], NA)
+    template_df[i, key] <- value
+  }
+}
+vcf_data <- cbind(vcf_data, template_df)
+all_values <- unlist(strsplit(as.character(vcf_data$FILTER), split=";"))
+unique_values <- unique(all_values)
+print(unique_values)
+
+#########重命名DP列
+dp_indices <- which(names(vcf_data) == "DP")
+if (length(dp_indices) > 1) {
+  vcf_data <- vcf_data %>%
+    rename_with(~ "FORMAT_DP", .cols = dp_indices[2])
+}
+
+names(vcf_data)[1] <- "#CHROM"
+
+# 输出文件名使用 ID
+output_file <- paste0(id, "_Sep.vcf")
+
+# 写入分离后的 VCF 文件
+write.table(vcf_data, output_file, row.names = FALSE, sep = "\t", quote = FALSE)
+
+
+
+
+
+
+  
+  
